@@ -2,9 +2,9 @@ from petitBloc import block
 from maya import cmds
 
 
-class MayaPythonLs(block.Block):
+class MayaPyLs(block.Block):
     def __init__(self):
-        super(MayaPythonLs, self).__init__()
+        super(MayaPyLs, self).__init__()
 
     def initialize(self):
         ## in my enviroment(maya2018 osx)
@@ -42,3 +42,24 @@ class MayaPythonLs(block.Block):
 
         for n in nodes:
             out.send(n)
+
+
+class MayaPyExist(block.Block):
+    def __init__(self):
+        super(MayaPyExist, self).__init__()
+
+    def initialize(self):
+        self.addInput(str, "name")
+        self.addOutput(bool, "exist")
+
+    def process(self):
+        name_p = self.input("name").receive()
+        if name_p.isEOP():
+            return False
+
+        name = name_p.value()
+        name_p.drop()
+
+        self.output("exist").send(cmds.objExists(name))
+
+        return True
