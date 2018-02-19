@@ -3,6 +3,24 @@ from maya import cmds
 from maya import utils
 
 
+class MayaUtil:
+    Numeric = ["bool", "doubleLinear", "doubleAngle", "double", "long", "short", "byte", "enum", "float"]
+    String = ["string"]
+
+    @staticmethod
+    def IsNumeric(typeName):
+        return typeName in MayaUtil.Numeric
+
+    @staticmethod
+    def IsString(typeName):
+        return typeName in MayaUtil.String
+
+    @staticmethod
+    def Execute(func, *args, **kwargs):
+        res = utils.executeInMainThreadWithResult(func, *args, **kwargs)
+        return res
+
+
 class MayaPyLs(block.Block):
     def __init__(self):
         super(MayaPyLs, self).__init__()
@@ -12,6 +30,9 @@ class MayaPyLs(block.Block):
         self.addParam(str, "type")
         self.addParam(str, "optionDict")
         self.addOutput(str, "result")
+
+    def __run(self, *args, **kwargs):
+        return cmds.ls(*args, **kwargs)
 
     def run(self):
         nodes = []
@@ -36,7 +57,7 @@ class MayaPyLs(block.Block):
         except:
             pass
 
-        nodes = utils.executeInMainThreadWithResult(cmds.ls, *args, **kwargs)
+        nodes = MayaUtil.Execute(self.__run, *args, **kwargs)
 
         out = self.output("result")
         for n in nodes:
@@ -51,17 +72,36 @@ class MayaPyExist(block.Block):
         self.addInput(str, "name")
         self.addOutput(bool, "exist")
 
-    def process(self):
-        name_p = self.input("name").receive()
-        if name_p.isEOP():
-            return False
+    def __run(self, *args, **kwargs):
+        results = []
+        for name in args[0]:
+            a = cmds.objExists(name)
+            results.append(a)
 
-        name = name_p.value()
-        name_p.drop()
+        return results
 
-        self.output("exist").send(cmds.objExists(name))
+    def run(self):
+        names = []
 
-        return True
+        inp = self.input("name")
+
+        while (True):
+            name_p = inp.receive()
+            if name_p.isEOP():
+                break
+
+            name = name_p.value()
+            name_p.drop()
+
+            names.append(name)
+
+        results = []
+        oup = self.output("exist")
+
+        results = MayaUtil.Execute(self.__run, *(names,))
+
+        for r in results:
+            oup.send(r)
 
 
 class MayaPyListAttr(block.Block):
@@ -75,115 +115,361 @@ class MayaPyListAttr(block.Block):
         self.addParam(bool, "userDefined")
         self.addParam(str, "optionDict")
 
-    def process(self):
-        obj_p = self.input("object").receive()
-        if obj_p.isEOP():
-            return False
+    def __run(self, *args, **kwargs):
+        results = []
+        for obj in args[0]:
+            results += map(lambda x: "{}.{}".format(obj, x), cmds.listAttr(obj, **kwargs) or [])
+
+        return results
+
+    def run(self):
+        objs = []
+        inp = self.input("object")
+
+        while (True):
+            obj_p = inp.receive()
+            if obj_p.isEOP():
+                break
+
+            obj = obj_p.value()
+
+            obj_p.drop()
+            objs.append(obj)
 
         kwargs = {}
 
         kwargs["keyable"] = self.param("keyable").get()
         kwargs["userDefined"] = self.param("userDefined").get()
+        try:
+            option_str = self.param("optionDict").get()
+            if option_str:
+                option_dict = eval(option_str)
+                if isinstance(option_dict, dict):
+                    kwargs.update(option_dict)
+        except:
+            pass
 
-        obj = obj_p.value()
-        obj_p.drop()
-
-        out = self.output("attr")
-        if utils.executeInMainThreadWithResult(cmds.objExists, *(obj,)):
-            for attr in utils.executeInMainThreadWithResult(cmds.listAttr, *(obj,), **kwargs) or []:
-                out.send(attr)
-
-        return True
+        oup = self.output("attr")
+        for r in MayaUtil.Execute(self.__run, *(objs, ), **kwargs):
+            oup.send(r)
 
 
-class MayaPyAttr(block.Block):
+class MayaPyGetAttrType(block.Block):
     def __init__(self):
-        super(MayaPyAttr, self).__init__()
-
-    def initialize(self):
-        self.addInput(str, "object")
-        self.addInput(str, "attrName")
-        self.addOutput(str, "attr")
-
-    def run(self):
-        self.__obj_eop = False
-        self.__attr_eop = False
-        self.__obj_dump = None
-        self.__attr_dump = None
-        super(MayaPyAttr, self).run()
-
-    def process(self):
-        if not self.__obj_eop:
-            obj = self.input("object").receive()
-            if obj.isEOP():
-                self.__obj_eop = True
-            else:
-                self.__obj_dump = obj.value()
-
-        if self.__obj_dump is None:
-            return False
-
-        if not self.__attr_eop:
-            att = self.input("attrName").receive()
-            if att.isEOP():
-                self.__attr_eop = True
-            else:
-                self.__attr_dump = att.value()
-
-        if self.__attr_dump is None:
-            return False
-
-        if self.__obj_eop and self.__attr_eop:
-            return False
-
-        self.output("attr").send("{}.{}".format(self.__obj_dump, self.__attr_dump))
-
-        return True
-
-
-class MayaPyGetAttr(block.Block):
-    Numeric = ["doubleLinear", "doubleAngle", "double", "long", "short", "byte", "enum", "float"]
-    Boolean = ["bool"]
-    String = ["string"]
-
-    def __init__(self):
-        super(MayaPyGetAttr, self).__init__()
+        super(MayaPyGetAttrType, self).__init__()
 
     def initialize(self):
         self.addInput(str, "attr")
-        self.addParam(bool, "type")
-        self.addOutput(bool, "bool")
-        self.addOutput(str, "str")
-        self.addOutput(float, "float")
+        self.addOutput(str, "type")
 
-    def process(self):
-        attr_p = self.input("attr").receive()
-        if attr_p.isEOP():
-            return False
+    def __run(self, *args, **kwargs):
+        types = []
 
-        attr = attr_p.value()
-        attr_p.drop()
+        for attr in args[0]:
+            types.append(cmds.getAttr(attr, type=True))
 
-        attr_type = utils.executeInMainThreadWithResult(cmds.getAttr, *(attr,), type=True)
+        return types
 
-        if self.param("type").get():
-            self.output("str").send(attr_type)
+    def run(self):
+        attrs = []
+        inp = self.input("attr")
 
-            return True
+        while (True):
+            attr_p = inp.receive()
+            if attr_p.isEOP():
+                break
 
-        if attr_type in MayaPyGetAttr.Numeric:
-            self.output("float").send(utils.executeInMainThreadWithResult(cmds.getAttr, *(attr,)))
+            attr = attr_p.value()
+            attr_p.drop()
 
-            return True
+            attrs.append(attr)
 
-        if attr_type in MayaPyGetAttr.Boolean:
-            self.output("bool").send(utils.executeInMainThreadWithResult(cmds.getAttr, *(attr,)))
+        types = MayaUtil.Execute(self.__run, *(attrs,))
 
-            return True
+        oup = self.output("type")
+        for t in types:
+            oup.send(t)
 
-        if attr_type in MayaPyGetAttr.String:
-            self.output("str").send(utils.executeInMainThreadWithResult(cmds.getAttr, *(attr,)))
 
-            return True
+class MayaPyAttrSelectorNumeric(block.Block):
+    def __init__(self):
+        super(MayaPyAttrSelectorNumeric, self).__init__()
 
-        return True
+    def initialize(self):
+        self.addInput(str, "attr")
+        self.addOutput(str, "numeric")
+        self.addOutput(str, "other")
+
+    def __run(self, *args, **kwargs):
+        numrics = []
+        others = []
+
+        for attr in args[0]:
+            type_str = cmds.getAttr(attr, type=True)
+
+            if not MayaUtil.IsNumeric(type_str):
+                others.append(attr)
+                continue
+
+            numrics.append(attr)
+
+        return (numrics, others)
+
+    def run(self):
+        attrs = []
+        inp = self.input("attr")
+
+        while (True):
+            attr_p = inp.receive()
+            if attr_p.isEOP():
+                break
+
+            attr = attr_p.value()
+            attr_p.drop()
+
+            attrs.append(attr)
+
+        numerics, others = MayaUtil.Execute(self.__run, *(attrs, ))
+
+        out_num = self.output("numeric")
+        out_other = self.output("other")
+
+        for n in numerics:
+            out_num.send(n)
+
+        for o in others:
+            out_other.send(o)
+
+
+class MayaPyAttrSelectorString(block.Block):
+    def __init__(self):
+        super(MayaPyAttrSelectorString, self).__init__()
+
+    def initialize(self):
+        self.addInput(str, "attr")
+        self.addOutput(str, "string")
+        self.addOutput(str, "other")
+
+    def __run(self, *args, **kwargs):
+        strings = []
+        others = []
+
+        for attr in args[0]:
+            type_str = cmds.getAttr(attr, type=True)
+
+            if not MayaUtil.IsString(type_str):
+                others.append(attr)
+                continue
+
+            strings.append(attr)
+
+        return (strings, others)
+
+    def run(self):
+        attrs = []
+        inp = self.input("attr")
+
+        while (True):
+            attr_p = inp.receive()
+            if attr_p.isEOP():
+                break
+
+            attr = attr_p.value()
+            attr_p.drop()
+
+            attrs.append(attr)
+
+        strings, others = MayaUtil.Execute(self.__run, *(attrs, ))
+
+        out_str = self.output("string")
+        out_other = self.output("other")
+
+        for n in strings:
+            out_str.send(n)
+
+        for o in others:
+            out_other.send(o)
+
+
+class MayaPyGetAttrNumeric(block.Block):
+    def __init__(self):
+        super(MayaPyGetAttrNumeric, self).__init__()
+
+    def initialize(self):
+        self.addInput(str, "attr")
+        self.addOutput(float, "value")
+
+    def __run(self, *args, **kwargs):
+        values = []
+
+        for attr in args[0]:
+            values.append(cmds.getAttr(attr))
+
+        return values
+
+    def run(self):
+        attrs = []
+        inp = self.input("attr")
+
+        while (True):
+            attr_p = inp.receive()
+            if attr_p.isEOP():
+                break
+
+            attr = attr_p.value()
+            attr_p.drop()
+
+            attrs.append(attr)
+
+        values = MayaUtil.Execute(self.__run, *(attrs, ))
+
+        val = self.output("value")
+
+        for v in values:
+            if not val.send(v):
+                val.send(0)
+
+
+class MayaPyGetAttrString(block.Block):
+    def __init__(self):
+        super(MayaPyGetAttrString, self).__init__()
+
+    def initialize(self):
+        self.addInput(str, "attr")
+        self.addOutput(str, "value")
+
+    def __run(self, *args, **kwargs):
+        values = []
+
+        for attr in args[0]:
+            values.append(cmds.getAttr(attr))
+
+        return values
+
+    def run(self):
+        attrs = []
+        inp = self.input("attr")
+
+        while (True):
+            attr_p = inp.receive()
+            if attr_p.isEOP():
+                break
+
+            attr = attr_p.value()
+            attr_p.drop()
+
+            attrs.append(attr)
+
+        values = MayaUtil.Execute(self.__run, *(attrs, ))
+
+        val = self.output("value")
+
+        for v in values:
+            if not val.send(v):
+                val.send("")
+
+
+class MayaPySetAttrNumeric(block.Block):
+    def __init__(self):
+        super(MayaPySetAttrNumeric, self).__init__()
+
+    def initialize(self):
+        self.addInput(str, "attr")
+        self.addInput(float, "value")
+        self.addOutput(bool, "result")
+
+    def __run(self, *args, **kwargs):
+        results = []
+
+        for attr, value in args[0]:
+            res = True
+            try:
+                cmds.setAttr(attr, value)
+            except:
+                res = False
+
+            results.append(res)
+
+        return results
+
+    def run(self):
+        attr_vals = []
+
+        in_att = self.input("attr")
+        in_val = self.input("value")
+
+        while (True):
+            attr_p = in_att.receive()
+            if attr_p.isEOP():
+                break
+
+            attr = attr_p.value()
+            attr_p.drop()
+
+            value_p = in_val.receive()
+            if value_p.isEOP():
+                break
+
+            value = value_p.value()
+            value_p.drop()
+
+            attr_vals.append((attr, value))
+
+        results = MayaUtil.Execute(self.__run, *(attr_vals, ))
+
+        oup = self.output("result")
+        for r in results:
+            oup.send(r)
+
+
+class MayaPySetAttrString(block.Block):
+    def __init__(self):
+        super(MayaPySetAttrString, self).__init__()
+
+    def initialize(self):
+        self.addInput(str, "attr")
+        self.addInput(str, "value")
+        self.addOutput(bool, "result")
+
+    def __run(self, *args, **kwargs):
+        results = []
+
+        for attr, value in args[0]:
+            res = True
+            try:
+                cmds.setAttr(attr, value, type="string")
+            except:
+                res = False
+
+            results.append(res)
+
+        return results
+
+    def run(self):
+        attr_vals = []
+
+        in_att = self.input("attr")
+        in_val = self.input("value")
+
+        while (True):
+            attr_p = in_att.receive()
+            if attr_p.isEOP():
+                break
+
+            attr = attr_p.value()
+            attr_p.drop()
+
+            value_p = in_val.receive()
+            if value_p.isEOP():
+                break
+
+            value = value_p.value()
+            value_p.drop()
+
+            attr_vals.append((attr, value))
+
+        results = MayaUtil.Execute(self.__run, *(attr_vals, ))
+
+        oup = self.output("result")
+        for r in results:
+            oup.send(r)
