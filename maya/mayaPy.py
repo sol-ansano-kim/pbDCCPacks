@@ -1,6 +1,7 @@
 from petitBloc import block
+from petitBloc.exts import mayaExts
 from maya import cmds
-from maya import utils
+from numbers import Number
 
 
 class MayaUtil:
@@ -14,11 +15,6 @@ class MayaUtil:
     @staticmethod
     def IsString(typeName):
         return typeName in MayaUtil.String
-
-    @staticmethod
-    def Execute(func, *args, **kwargs):
-        res = utils.executeInMainThreadWithResult(func, *args, **kwargs)
-        return res
 
 
 class MayaPyLs(block.Block):
@@ -57,7 +53,7 @@ class MayaPyLs(block.Block):
         except:
             pass
 
-        nodes = MayaUtil.Execute(self.__run, *args, **kwargs)
+        nodes = mayaExts.ExecuteFunction(self.__run, *args, **kwargs)
 
         out = self.output("result")
         for n in nodes:
@@ -98,7 +94,7 @@ class MayaPyExist(block.Block):
         results = []
         oup = self.output("exist")
 
-        results = MayaUtil.Execute(self.__run, *(names,))
+        results = mayaExts.ExecuteFunction(self.__run, *(names,))
 
         for r in results:
             oup.send(r)
@@ -150,7 +146,7 @@ class MayaPyListAttr(block.Block):
             pass
 
         oup = self.output("attr")
-        for r in MayaUtil.Execute(self.__run, *(objs, ), **kwargs):
+        for r in mayaExts.ExecuteFunction(self.__run, *(objs, ), **kwargs):
             oup.send(r)
 
 
@@ -184,7 +180,7 @@ class MayaPyGetAttrType(block.Block):
 
             attrs.append(attr)
 
-        types = MayaUtil.Execute(self.__run, *(attrs,))
+        types = mayaExts.ExecuteFunction(self.__run, *(attrs,))
 
         oup = self.output("type")
         for t in types:
@@ -229,7 +225,7 @@ class MayaPyAttrSelectorNumeric(block.Block):
 
             attrs.append(attr)
 
-        numerics, others = MayaUtil.Execute(self.__run, *(attrs, ))
+        numerics, others = mayaExts.ExecuteFunction(self.__run, *(attrs, ))
 
         out_num = self.output("numeric")
         out_other = self.output("other")
@@ -279,7 +275,7 @@ class MayaPyAttrSelectorString(block.Block):
 
             attrs.append(attr)
 
-        strings, others = MayaUtil.Execute(self.__run, *(attrs, ))
+        strings, others = mayaExts.ExecuteFunction(self.__run, *(attrs, ))
 
         out_str = self.output("string")
         out_other = self.output("other")
@@ -303,7 +299,12 @@ class MayaPyGetAttrNumeric(block.Block):
         values = []
 
         for attr in args[0]:
-            values.append(cmds.getAttr(attr))
+            v = cmds.getAttr(attr)
+            if not isinstance(v, Number):
+                self.warn("Invalid type '{}'".format(type(v)))
+                continue
+
+            values.append(v)
 
         return values
 
@@ -321,7 +322,7 @@ class MayaPyGetAttrNumeric(block.Block):
 
             attrs.append(attr)
 
-        values = MayaUtil.Execute(self.__run, *(attrs, ))
+        values = mayaExts.ExecuteFunction(self.__run, *(attrs, ))
 
         val = self.output("value")
 
@@ -342,7 +343,15 @@ class MayaPyGetAttrString(block.Block):
         values = []
 
         for attr in args[0]:
-            values.append(cmds.getAttr(attr))
+            v = cmds.getAttr(attr)
+            if v is None:
+                v = ""
+
+            if not isinstance(v, basestring):
+                self.warn("Invalid type '{}'".format(type(v)))
+                continue
+
+            values.append(v)
 
         return values
 
@@ -360,7 +369,7 @@ class MayaPyGetAttrString(block.Block):
 
             attrs.append(attr)
 
-        values = MayaUtil.Execute(self.__run, *(attrs, ))
+        values = mayaExts.ExecuteFunction(self.__run, *(attrs, ))
 
         val = self.output("value")
 
@@ -385,7 +394,8 @@ class MayaPySetAttrNumeric(block.Block):
             res = True
             try:
                 cmds.setAttr(attr, value)
-            except:
+            except Exception as e:
+                self.warn(str(e))
                 res = False
 
             results.append(res)
@@ -415,7 +425,7 @@ class MayaPySetAttrNumeric(block.Block):
 
             attr_vals.append((attr, value))
 
-        results = MayaUtil.Execute(self.__run, *(attr_vals, ))
+        results = mayaExts.ExecuteFunction(self.__run, *(attr_vals, ))
 
         oup = self.output("result")
         for r in results:
@@ -438,7 +448,8 @@ class MayaPySetAttrString(block.Block):
             res = True
             try:
                 cmds.setAttr(attr, value, type="string")
-            except:
+            except Exception as e:
+                self.warn(str(e))
                 res = False
 
             results.append(res)
@@ -468,8 +479,211 @@ class MayaPySetAttrString(block.Block):
 
             attr_vals.append((attr, value))
 
-        results = MayaUtil.Execute(self.__run, *(attr_vals, ))
+        results = mayaExts.ExecuteFunction(self.__run, *(attr_vals, ))
 
         oup = self.output("result")
         for r in results:
             oup.send(r)
+
+
+class MayaPyCreateNode(block.Block):
+    def __init__(self):
+        super(MayaPyCreateNode, self).__init__()
+
+    def initialize(self):
+        self.addInput(str, "name")
+        self.addInput(str, "nodeType")
+        self.addOutput(str, "node")
+
+    def __run(self, *args, **kwargs):
+        results = []
+
+        for name, node_type in args[0]:
+            results.append(cmds.createNode(node_type, n=name, s=True))
+
+        return results
+
+    def run(self):
+        all_types = cmds.allNodeTypes()
+        in_name = self.input("name")
+        in_type = self.input("nodeType")
+
+        name_type_list = []
+        node_type_eop = False
+        node_type_dump = None
+
+        while (True):
+            if (not node_type_eop):
+                type_p = in_type.receive()
+                if type_p.isEOP():
+                    node_type_eop = True
+                else:
+                    node_type_dump = type_p.value()
+                    type_p.drop()
+
+            if node_type_dump is None:
+                break
+
+            if node_type_dump not in all_types:
+                self.warn("Unknown nodeType '{}'".format(node_type_dump))
+                return
+
+            name_p = in_name.receive()
+            if name_p.isEOP():
+                break
+
+            name_type_list.append((name_p.value(), node_type_dump))
+            name_p.drop()
+
+        results = mayaExts.ExecuteFunction(self.__run, *(name_type_list,))
+
+        oup = self.output("node")
+        for r in results:
+            oup.send(r)
+
+
+class MayaPyListConnections(block.Block):
+    def __init__(self):
+        super(MayaPyListConnections, self).__init__()
+
+    def initialize(self):
+        self.addInput(str, "name")
+        self.addParam(bool, "srcConnection")
+        self.addParam(bool, "dstConnection")
+        self.addParam(str, "type")
+        self.addOutput(str, "source")
+        self.addOutput(str, "destination")
+
+    def __run(self, *args, **kwargs):
+        results = []
+
+        for name in args[0]:
+            if kwargs.get("source"):
+                op = kwargs.copy()
+                op["destination"] = False
+
+                conns = cmds.listConnections(name, **op) or []
+
+                for i in range(0, len(conns), 2):
+                    src = conns[i + 1]
+                    dst = conns[i]
+
+                    results.append((src, dst))
+
+            if kwargs.get("destination"):
+                op = kwargs.copy()
+                op["source"] = False
+
+                conns = cmds.listConnections(name, **op) or []
+
+                for i in range(0, len(conns), 2):
+                    src = conns[i]
+                    dst = conns[i + 1]
+
+                    results.append((src, dst))
+
+        return results
+
+    def run(self):
+        options = {"connections": True, "plugs": True}
+        options["source"] = self.param("srcConnection").get()
+        options["destination"] = self.param("dstConnection").get()
+        type_name = self.param("type").get()
+        if type_name:
+            options["type"] = type_name
+
+        names = []
+        in_name = self.input("name")
+        while (True):
+            name_p = in_name.receive()
+            if name_p.isEOP():
+                break
+
+            names.append(name_p.value())
+            name_p.drop()
+
+        results = mayaExts.ExecuteFunction(self.__run, *(names, ), **options)
+
+        out_src = self.output('source')
+        out_dst = self.output('destination')
+
+        for (src, dst) in results:
+            out_src.send(src)
+            out_dst.send(dst)
+
+
+class MayaPyListChildren(block.Block):
+    def __init__(self):
+        super(MayaPyListChildren, self).__init__()
+
+    def initialize(self):
+        self.addInput(str, "name")
+        self.addOutput(list, "children")
+        self.addParam(bool, "fullPath")
+
+    def __run(self, *args, **kwargs):
+        results = []
+        for name in args[0]:
+            results.append(cmds.listRelatives(name, **kwargs) or [])
+
+        return results
+
+    def run(self):
+        options = {}
+        options["fullPath"] = self.param("fullPath").get()
+        options["children"] = True
+
+        names = []
+        in_name = self.input("name")
+        while (True):
+            name_p = in_name.receive()
+            if name_p.isEOP():
+                break
+
+            names.append(name_p.value())
+            name_p.drop()
+
+        results = mayaExts.ExecuteFunction(self.__run, *(names, ), **options)
+
+        out_chd = self.output('children')
+
+        for children in results:
+            out_chd.send(children)
+
+
+class MayaPyListParents(block.Block):
+    def __init__(self):
+        super(MayaPyListParents, self).__init__()
+
+    def initialize(self):
+        self.addInput(str, "name")
+        self.addOutput(list, "parents")
+        self.addParam(bool, "fullPath")
+
+    def __run(self, *args, **kwargs):
+        results = []
+        for name in args[0]:
+            results.append(cmds.listRelatives(name, **kwargs) or [])
+
+        return results
+
+    def run(self):
+        options = {"fullPath": self.param("fullPath").get()}
+        options["parent"] = True
+
+        names = []
+        in_name = self.input("name")
+        while (True):
+            name_p = in_name.receive()
+            if name_p.isEOP():
+                break
+
+            names.append(name_p.value())
+            name_p.drop()
+
+        results = mayaExts.ExecuteFunction(self.__run, *(names, ), **options)
+
+        out_prn = self.output('parents')
+
+        for parents in results:
+            out_prn.send(parents)
