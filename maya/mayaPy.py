@@ -17,6 +17,92 @@ class MayaUtil:
         return typeName in MayaUtil.String
 
 
+class MayaPyFileOpen(block.Block):
+    def __init__(self):
+        super(MayaPyFileOpen, self).__init__()
+
+    def initialize(self):
+        self.addParam(str, "file")
+        self.addOutput(str, "node")
+
+    def __run(self, *args, **kwargs):
+        return cmds.file(args[0], **kwargs)
+
+    def run(self):
+        new_nodes = mayaExts.ExecuteFunction(self.__run, *(self.param("file").get(), ), open=True, force=True, returnNewNodes=True)
+
+        oup = self.output("node")
+
+        for n in new_nodes:
+            oup.send(n)
+
+
+class MayaPyFileImport(block.Block):
+    def __init__(self):
+        super(MayaPyFileImport, self).__init__()
+
+    def initialize(self):
+        self.addInput(str, "file")
+        self.addInput(str, "namespace")
+        self.addOutput(str, "node")
+        self.addParam(bool, "reference")
+
+    def __run(self, *args, **kwargs):
+        new_nodes = []
+
+        for (file_path, ns) in args[0]:
+            option = kwargs.copy()
+            if ns:
+                option["namespace"] = ns
+
+            results = cmds.file(file_path, **option) or []
+            new_nodes += results
+
+        return new_nodes
+
+    def run(self):
+        file_ns_list = []
+        options = {}
+        namespace_eop = False
+        namespace_dump = None
+
+        in_ns = self.input("namespace")
+        in_file = self.input("file")
+
+        while (True):
+            if not namespace_eop:
+                ns_p = in_ns.receive()
+                if ns_p.isEOP():
+                    namespace_eop = True
+                else:
+                    namespace_dump = ns_p.value()
+                    ns_p.drop()
+
+            if namespace_dump is None:
+                break
+
+            file_p = in_file.receive()
+            if file_p.isEOP():
+                break
+
+            file_ns_list.append((file_p.value(), namespace_dump))
+            file_p.drop()
+
+        if self.param("reference").get():
+            options["reference"] = True
+        else:
+            options["import"] = True
+
+        options["returnNewNodes"] = True
+
+        new_nodes = mayaExts.ExecuteFunction(self.__run, *(file_ns_list, ), **options)
+
+        oup = self.output("node")
+
+        for n in new_nodes:
+            oup.send(n)
+
+
 class MayaPyLs(block.Block):
     def __init__(self):
         super(MayaPyLs, self).__init__()
@@ -486,6 +572,167 @@ class MayaPySetAttrString(block.Block):
             oup.send(r)
 
 
+class MayaPyConnectAttr(block.Block):
+    def __init__(self):
+        super(MayaPyConnectAttr, self).__init__()
+
+    def initialize(self):
+        self.addInput(str, "source")
+        self.addInput(str, "destination")
+        self.addOutput(bool, "result")
+
+    def __run(self, *args, **kwargs):
+        results = []
+
+        for src, dst in args[0]:
+            try:
+                cmds.connectAttr(src, dst, force=True)
+                results.append(True)
+            except Exception as e:
+                self.warn(str(e))
+                results.append(False)
+
+        return results
+
+    def run(self):
+        src_dst_list = []
+        in_src = self.input("source")
+        in_dst = self.input("destination")
+
+        while (True):
+            src = None
+            dst = None
+
+            src_p = in_src.receive()
+            if src_p.isEOP():
+                break
+
+            src = src_p.value()
+            src_p.drop()
+
+            dst_p = in_dst.receive()
+            if dst_p.isEOP():
+                break
+
+            dst = dst_p.value()
+            dst_p.drop()
+
+            src_dst_list.append((src, dst))
+
+        results = mayaExts.ExecuteFunction(self.__run, *(src_dst_list,))
+
+        oup = self.output("result")
+        for r in results:
+            oup.send(r)
+
+
+class MayaPyDisconnectAttr(block.Block):
+    def __init__(self):
+        super(MayaPyDisconnectAttr, self).__init__()
+
+    def initialize(self):
+        self.addInput(str, "source")
+        self.addInput(str, "destination")
+        self.addOutput(bool, "result")
+
+    def __run(self, *args, **kwargs):
+        results = []
+
+        for src, dst in args[0]:
+            try:
+                cmds.disconnectAttr(src, dst)
+                results.append(True)
+            except Exception as e:
+                self.warn(str(e))
+                results.append(False)
+
+        return results
+
+    def run(self):
+        src_dst_list = []
+        in_src = self.input("source")
+        in_dst = self.input("destination")
+
+        while (True):
+            src = None
+            dst = None
+
+            src_p = in_src.receive()
+            if src_p.isEOP():
+                break
+
+            src = src_p.value()
+            src_p.drop()
+
+            dst_p = in_dst.receive()
+            if dst_p.isEOP():
+                break
+
+            dst = dst_p.value()
+            dst_p.drop()
+
+            src_dst_list.append((src, dst))
+
+        results = mayaExts.ExecuteFunction(self.__run, *(src_dst_list,))
+
+        oup = self.output("result")
+        for r in results:
+            oup.send(r)
+
+
+class MayaPyIsConnected(block.Block):
+    def __init__(self):
+        super(MayaPyIsConnected, self).__init__()
+
+    def initialize(self):
+        self.addInput(str, "source")
+        self.addInput(str, "destination")
+        self.addOutput(bool, "result")
+
+    def __run(self, *args, **kwargs):
+        results = []
+
+        for src, dst in args[0]:
+            try:
+                results.append(cmds.isConnected(src, dst))
+            except Exception as e:
+                self.warn(str(e))
+                results.append(False)
+
+        return results
+
+    def run(self):
+        src_dst_list = []
+        in_src = self.input("source")
+        in_dst = self.input("destination")
+
+        while (True):
+            src = None
+            dst = None
+
+            src_p = in_src.receive()
+            if src_p.isEOP():
+                break
+
+            src = src_p.value()
+            src_p.drop()
+
+            dst_p = in_dst.receive()
+            if dst_p.isEOP():
+                break
+
+            dst = dst_p.value()
+            dst_p.drop()
+
+            src_dst_list.append((src, dst))
+
+        results = mayaExts.ExecuteFunction(self.__run, *(src_dst_list,))
+
+        oup = self.output("result")
+        for r in results:
+            oup.send(r)
+
+
 class MayaPyCreateNode(block.Block):
     def __init__(self):
         super(MayaPyCreateNode, self).__init__()
@@ -540,6 +787,31 @@ class MayaPyCreateNode(block.Block):
         oup = self.output("node")
         for r in results:
             oup.send(r)
+
+
+class MayaPyDelete(block.Block):
+    def __init__(self):
+        super(MayaPyDelete, self).__init__()
+
+    def initialize(self):
+        self.addInput(str, "node")
+
+    def __run(self, *args, **kwargs):
+        cmds.delete(args[0])
+
+    def run(self):
+        nodes = []
+
+        in_node = self.input("node")
+        while (True):
+            node_p = in_node.receive()
+            if node_p.isEOP():
+                break
+
+            nodes.append(node_p.value())
+            node_p.drop()
+
+        mayaExts.ExecuteFunction(self.__run, *(nodes, ))
 
 
 class MayaPyListConnections(block.Block):
